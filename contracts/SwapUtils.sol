@@ -132,7 +132,7 @@ library SwapUtils {
     /**
      * @notice Calculate the dy, the amount of selected token that user receives and
      * the fee of withdrawing in one token
-     * @param tokenAmount the amount to withdraw in the pool's precision
+     * @param tokenAmount the amount of LP token to burn in the pool's precision
      * @param tokenIndex which token will be withdrawn
      * @param self Swap struct to read from
      * @return the amount of token user will receive
@@ -183,7 +183,7 @@ library SwapUtils {
      * @notice Calculate the dy of withdrawing in one token
      * @param self Swap struct to read from
      * @param tokenIndex which token will be withdrawn
-     * @param tokenAmount the amount to withdraw in the pools precision
+     * @param tokenAmount the amount of LP token to burn in the pools precision
      * @return the d and the new y after withdrawing one token
      */
     function calculateWithdrawOneTokenDY(

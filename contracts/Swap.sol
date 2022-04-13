@@ -40,54 +40,6 @@ contract Swap is OwnerPausableUpgradeable {
     // getTokenIndex function also relies on this mapping to retrieve token index.
     mapping(address => uint8) private tokenIndexes;
 
-    /*** EVENTS ***/
-
-    // events replicated from SwapUtils to make the ABI easier for dumb
-    // clients
-    event TokenSwap(
-        address indexed buyer,
-        uint256 tokensSold,
-        uint256 tokensBought,
-        uint128 soldId,
-        uint128 boughtId
-    );
-    event AddLiquidity(
-        address indexed provider,
-        uint256[] tokenAmounts,
-        uint256[] fees,
-        uint256 invariant,
-        uint256 lpTokenSupply
-    );
-    event RemoveLiquidity(
-        address indexed provider,
-        uint256[] tokenAmounts,
-        uint256 lpTokenSupply
-    );
-    event RemoveLiquidityOne(
-        address indexed provider,
-        uint256 lpTokenAmount,
-        uint256 lpTokenSupply,
-        uint256 boughtId,
-        uint256 tokensBought
-    );
-    event RemoveLiquidityImbalance(
-        address indexed provider,
-        uint256[] tokenAmounts,
-        uint256[] fees,
-        uint256 invariant,
-        uint256 lpTokenSupply
-    );
-    event NewAdminFee(uint256 newAdminFee);
-    event NewSwapFee(uint256 newSwapFee);
-    event NewWithdrawFee(uint256 newWithdrawFee);
-    event RampA(
-        uint256 oldA,
-        uint256 newA,
-        uint256 initialTime,
-        uint256 futureTime
-    );
-    event StopRampA(uint256 currentA, uint256 time);
-
     /**
      * @notice Initializes this Swap contract with the given parameters.
      * This will also clone a LPToken contract that represents users'
@@ -116,7 +68,6 @@ contract Swap is OwnerPausableUpgradeable {
         address lpTokenTargetAddress
     ) public virtual initializer {
         __OwnerPausable_init();
-        __ReentrancyGuard_init();
         // Check _pooledTokens and precisions parameter
         require(_pooledTokens.length > 1, "_pooledTokens.length <= 1");
         require(_pooledTokens.length <= 32, "_pooledTokens.length > 32");
