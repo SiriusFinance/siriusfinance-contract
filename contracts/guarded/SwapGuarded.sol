@@ -2,12 +2,13 @@
 
 pragma solidity 0.8.6;
 
-import "@openzeppelin/contracts-upgradeable-4.2.0/utils/math/SafeMathUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable-4.2.0/token/ERC20/utils/SafeERC20Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable-4.2.0/proxy/ClonesUpgradeable.sol";
-import "./OwnerPausableUpgradeable.sol";
-import "./SwapUtils.sol";
-import "./AmplificationUtils.sol";
+import "@openzeppelin/contracts-4.2.0/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts-4.2.0/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts-4.2.0/security/ReentrancyGuard.sol";
+import "./OwnerPausable.sol";
+import "./SwapUtilsGuarded.sol";
+import "../MathUtils.sol";
+import "./Allowlist.sol";
 
 /**
  * @title Swap - A StableSwap implementation in solidity.
@@ -26,15 +27,24 @@ import "./AmplificationUtils.sol";
  * @dev Most of the logic is stored as a library `SwapUtils` for the sake of reducing contract's
  * deployment size.
  */
-contract Swap is OwnerPausableUpgradeable {
-    using SafeERC20Upgradeable for IERC20Upgradeable;
-    using SafeMathUpgradeable for uint256;
-    using SwapUtils for SwapUtils.Swap;
-    using AmplificationUtils for SwapUtils.Swap;
+contract SwapGuarded is OwnerPausable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+    using SafeMath for uint256;
+    using MathUtils for uint256;
+    using SwapUtilsGuarded for SwapUtilsGuarded.Swap;
 
     // Struct storing data responsible for automatic market maker functionalities. In order to
-    // access this data, this contract uses SwapUtils library. For more details, see SwapUtils.sol
-    SwapUtils.Swap public swapStorage;
+    // access this data, this contract uses SwapUtils library. For more details, see SwapUtilsGuarded.sol
+    SwapUtilsGuarded.Swap public swapStorage;
+
+    // Address to allowlist contract that holds information about maximum totaly supply of lp tokens
+    // and maximum mintable amount per user address. As this is immutable, this will become a constant
+    // after initialization.
+    IAllowlist private immutable allowlist;
+
+    // Boolean value that notates whether this pool is guarded or not. When isGuarded is true,
+    // addLiquidity function will be restricted by limits defined in allowlist contract.
+    bool private guarded = true;
 
     // Maps token address to an index in the pool. Used to prevent duplicate tokens in the pool.
     // getTokenIndex function also relies on this mapping to retrieve token index.
@@ -89,10 +99,10 @@ contract Swap is OwnerPausableUpgradeable {
     event StopRampA(uint256 currentA, uint256 time);
 
     /**
-     * @notice Initializes this Swap contract with the given parameters.
-     * This will also clone a LPToken contract that represents users'
-     * LP positions. The owner of LPToken will be this contract - which means
-     * only this contract is allowed to mint/burn tokens.
+     * @notice Deploys this Swap contract with given parameters as default
+     * values. This will also deploy a LPToken that represents users
+     * LP position. The owner of LPToken will be this contract - which means
+     * only this contract is allowed to mint new tokens.
      *
      * @param _pooledTokens an array of ERC20s this pool will accept
      * @param decimals the decimals to use for each pooled token,
@@ -103,19 +113,20 @@ contract Swap is OwnerPausableUpgradeable {
      * StableSwap paper for details
      * @param _fee default swap fee to be initialized with
      * @param _adminFee default adminFee to be initialized with
-     * @param lpTokenTargetAddress the address of an existing LPToken contract to use as a target
+     * @param _withdrawFee default withdrawFee to be initialized with
+     * @param _allowlist address of allowlist contract for guarded launch
      */
-    function initialize(
-        IERC20Upgradeable[] memory _pooledTokens,
+    constructor(
+        IERC20[] memory _pooledTokens,
         uint8[] memory decimals,
         string memory lpTokenName,
         string memory lpTokenSymbol,
         uint256 _a,
         uint256 _fee,
         uint256 _adminFee,
-        address lpTokenTargetAddress
-    ) public virtual initializer {
-        __OwnerPausable_init();
+        uint256 _withdrawFee,
+        IAllowlist _allowlist
+    ) public OwnerPausable() ReentrancyGuard() {
         // Check _pooledTokens and precisions parameter
         require(_pooledTokens.length > 1, "_pooledTokens.length <= 1");
         require(_pooledTokens.length <= 32, "_pooledTokens.length > 32");
@@ -140,43 +151,52 @@ contract Swap is OwnerPausableUpgradeable {
                 "The 0 address isn't an ERC-20"
             );
             require(
-                decimals[i] <= SwapUtils.POOL_PRECISION_DECIMALS,
+                decimals[i] <= SwapUtilsGuarded.POOL_PRECISION_DECIMALS,
                 "Token decimals exceeds max"
             );
             precisionMultipliers[i] =
                 10 **
-                    uint256(SwapUtils.POOL_PRECISION_DECIMALS).sub(
+                    uint256(SwapUtilsGuarded.POOL_PRECISION_DECIMALS).sub(
                         uint256(decimals[i])
                     );
             tokenIndexes[address(_pooledTokens[i])] = i;
         }
 
-        // Check _a, _fee, _adminFee, _withdrawFee parameters
-        require(_a < AmplificationUtils.MAX_A, "_a exceeds maximum");
-        require(_fee < SwapUtils.MAX_SWAP_FEE, "_fee exceeds maximum");
+        // Check _a, _fee, _adminFee, _withdrawFee, _allowlist parameters
+        require(_a < SwapUtilsGuarded.MAX_A, "_a exceeds maximum");
+        require(_fee < SwapUtilsGuarded.MAX_SWAP_FEE, "_fee exceeds maximum");
         require(
-            _adminFee < SwapUtils.MAX_ADMIN_FEE,
+            _adminFee < SwapUtilsGuarded.MAX_ADMIN_FEE,
             "_adminFee exceeds maximum"
         );
-
-        // Clone and initialize a LPToken contract
-        LPToken lpToken = LPToken(ClonesUpgradeable.clone(lpTokenTargetAddress));
         require(
-            lpToken.initialize(lpTokenName, lpTokenSymbol),
-            "could not init lpToken clone"
+            _withdrawFee < SwapUtilsGuarded.MAX_WITHDRAW_FEE,
+            "_withdrawFee exceeds maximum"
+        );
+        require(
+            _allowlist.getPoolCap(address(0x0)) == uint256(0x54dd1e),
+            "Allowlist check failed"
         );
 
         // Initialize swapStorage struct
-        swapStorage.lpToken = lpToken;
+        swapStorage.lpToken = new LPTokenGuarded(
+            lpTokenName,
+            lpTokenSymbol
+        );
         swapStorage.pooledTokens = _pooledTokens;
         swapStorage.tokenPrecisionMultipliers = precisionMultipliers;
         swapStorage.balances = new uint256[](_pooledTokens.length);
-        swapStorage.initialA = _a.mul(AmplificationUtils.A_PRECISION);
-        swapStorage.futureA = _a.mul(AmplificationUtils.A_PRECISION);
-        // swapStorage.initialATime = 0;
-        // swapStorage.futureATime = 0;
+        swapStorage.initialA = _a.mul(SwapUtilsGuarded.A_PRECISION);
+        swapStorage.futureA = _a.mul(SwapUtilsGuarded.A_PRECISION);
+        swapStorage.initialATime = 0;
+        swapStorage.futureATime = 0;
         swapStorage.swapFee = _fee;
         swapStorage.adminFee = _adminFee;
+        swapStorage.defaultWithdrawFee = _withdrawFee;
+
+        // Initialize variables related to guarding the initial deposits
+        allowlist = _allowlist;
+        guarded = true;
     }
 
     /*** MODIFIERS ***/
@@ -197,7 +217,7 @@ contract Swap is OwnerPausableUpgradeable {
      * @dev See the StableSwap paper for details
      * @return A parameter
      */
-    function getA() external view virtual returns (uint256) {
+    function getA() external view returns (uint256) {
         return swapStorage.getA();
     }
 
@@ -206,7 +226,7 @@ contract Swap is OwnerPausableUpgradeable {
      * @dev See the StableSwap paper for details
      * @return A parameter in its raw precision form
      */
-    function getAPrecise() external view virtual returns (uint256) {
+    function getAPrecise() external view returns (uint256) {
         return swapStorage.getAPrecise();
     }
 
@@ -215,7 +235,7 @@ contract Swap is OwnerPausableUpgradeable {
      * @param index the index of the token
      * @return address of the token at given index
      */
-    function getToken(uint8 index) public view virtual returns (IERC20Upgradeable) {
+    function getToken(uint8 index) public view returns (IERC20) {
         require(index < swapStorage.pooledTokens.length, "Out of range");
         return swapStorage.pooledTokens[index];
     }
@@ -226,12 +246,7 @@ contract Swap is OwnerPausableUpgradeable {
      * @param tokenAddress address of the token
      * @return the index of the given token address
      */
-    function getTokenIndex(address tokenAddress)
-        public
-        view
-        virtual
-        returns (uint8)
-    {
+    function getTokenIndex(address tokenAddress) external view returns (uint8) {
         uint8 index = tokenIndexes[tokenAddress];
         require(
             address(getToken(index)) == tokenAddress,
@@ -241,16 +256,27 @@ contract Swap is OwnerPausableUpgradeable {
     }
 
     /**
+     * @notice Reads and returns the address of the allowlist that is set during deployment of this contract
+     * @return the address of the allowlist contract casted to the IAllowlist interface
+     */
+    function getAllowlist() external view returns (IAllowlist) {
+        return allowlist;
+    }
+
+    /**
+     * @notice Return timestamp of last deposit of given address
+     * @return timestamp of the last deposit made by the given address
+     */
+    function getDepositTimestamp(address user) external view returns (uint256) {
+        return swapStorage.getDepositTimestamp(user);
+    }
+
+    /**
      * @notice Return current balance of the pooled token at given index
      * @param index the index of the token
      * @return current balance of the pooled token at given index with token's native precision
      */
-    function getTokenBalance(uint8 index)
-        external
-        view
-        virtual
-        returns (uint256)
-    {
+    function getTokenBalance(uint8 index) external view returns (uint256) {
         require(index < swapStorage.pooledTokens.length, "Index out of range");
         return swapStorage.balances[index];
     }
@@ -259,7 +285,7 @@ contract Swap is OwnerPausableUpgradeable {
      * @notice Get the virtual price, to help calculate profit
      * @return the virtual price, scaled to the POOL_PRECISION_DECIMALS
      */
-    function getVirtualPrice() external view virtual returns (uint256) {
+    function getVirtualPrice() external view returns (uint256) {
         return swapStorage.getVirtualPrice();
     }
 
@@ -275,7 +301,7 @@ contract Swap is OwnerPausableUpgradeable {
         uint8 tokenIndexFrom,
         uint8 tokenIndexTo,
         uint256 dx
-    ) external view virtual returns (uint256) {
+    ) external view returns (uint256) {
         return swapStorage.calculateSwap(tokenIndexFrom, tokenIndexTo, dx);
     }
 
@@ -287,6 +313,7 @@ contract Swap is OwnerPausableUpgradeable {
      *
      * @dev This shouldn't be used outside frontends for user estimates.
      *
+     * @param account address that is depositing or withdrawing tokens
      * @param amounts an array of token amounts to deposit or withdrawal,
      * corresponding to pooledTokens. The amount should be in each
      * pooled token's native precision. If a token charges a fee on transfers,
@@ -294,43 +321,65 @@ contract Swap is OwnerPausableUpgradeable {
      * @param deposit whether this is a deposit or a withdrawal
      * @return token amount the user will receive
      */
-    function calculateTokenAmount(uint256[] calldata amounts, bool deposit)
-        external
-        view
-        virtual
-        returns (uint256)
-    {
-        return swapStorage.calculateTokenAmount(amounts, deposit);
+    function calculateTokenAmount(
+        address account,
+        uint256[] calldata amounts,
+        bool deposit
+    ) external view returns (uint256) {
+        return swapStorage.calculateTokenAmount(account, amounts, deposit);
     }
 
     /**
      * @notice A simple method to calculate amount of each underlying
      * tokens that is returned upon burning given amount of LP tokens
+     * @param account the address that is withdrawing tokens
      * @param amount the amount of LP tokens that would be burned on withdrawal
      * @return array of token balances that the user will receive
      */
-    function calculateRemoveLiquidity(uint256 amount)
+    function calculateRemoveLiquidity(address account, uint256 amount)
         external
         view
-        virtual
         returns (uint256[] memory)
     {
-        return swapStorage.calculateRemoveLiquidity(amount);
+        return swapStorage.calculateRemoveLiquidity(account, amount);
     }
 
     /**
      * @notice Calculate the amount of underlying token available to withdraw
      * when withdrawing via only single token
+     * @param account the address that is withdrawing tokens
      * @param tokenAmount the amount of LP token to burn
      * @param tokenIndex index of which token will be withdrawn
      * @return availableTokenAmount calculated amount of underlying token
      * available to withdraw
      */
     function calculateRemoveLiquidityOneToken(
+        address account,
         uint256 tokenAmount,
         uint8 tokenIndex
-    ) external view virtual returns (uint256 availableTokenAmount) {
-        return swapStorage.calculateWithdrawOneToken(tokenAmount, tokenIndex);
+    ) external view returns (uint256 availableTokenAmount) {
+        (availableTokenAmount, ) = swapStorage.calculateWithdrawOneToken(
+            account,
+            tokenAmount,
+            tokenIndex
+        );
+    }
+
+    /**
+     * @notice Calculate the fee that is applied when the given user withdraws. The withdraw fee
+     * decays linearly over period of 4 weeks. For example, depositing and withdrawing right away
+     * will charge you the full amount of withdraw fee. But withdrawing after 4 weeks will charge you
+     * no additional fees.
+     * @dev returned value should be divided by FEE_DENOMINATOR to convert to correct decimals
+     * @param user address you want to calculate withdraw fee of
+     * @return current withdraw fee of the user
+     */
+    function calculateCurrentWithdrawFee(address user)
+        external
+        view
+        returns (uint256)
+    {
+        return swapStorage.calculateCurrentWithdrawFee(user);
     }
 
     /**
@@ -338,12 +387,7 @@ contract Swap is OwnerPausableUpgradeable {
      * @param index Index of the pooled token
      * @return admin's token balance in the token's precision
      */
-    function getAdminBalance(uint256 index)
-        external
-        view
-        virtual
-        returns (uint256)
-    {
+    function getAdminBalance(uint256 index) external view returns (uint256) {
         return swapStorage.getAdminBalance(index);
     }
 
@@ -365,7 +409,6 @@ contract Swap is OwnerPausableUpgradeable {
         uint256 deadline
     )
         external
-        virtual
         nonReentrant
         whenNotPaused
         deadlineCheck(deadline)
@@ -375,26 +418,32 @@ contract Swap is OwnerPausableUpgradeable {
     }
 
     /**
-     * @notice Add liquidity to the pool with the given amounts of tokens
+     * @notice Add liquidity to the pool with given amounts during guarded launch phase. Only users
+     * with valid address and proof can successfully call this function. When this function is called
+     * after the guarded release phase is over, the merkleProof is ignored.
      * @param amounts the amounts of each token to add, in their native precision
      * @param minToMint the minimum LP tokens adding this amount of liquidity
      * should mint, otherwise revert. Handy for front-running mitigation
      * @param deadline latest timestamp to accept this transaction
+     * @param merkleProof data generated when constructing the allowlist merkle tree. Users can
+     * get this data off chain. Even if the address is in the allowlist, users must include
+     * a valid proof for this call to succeed. If the pool is no longer in the guarded release phase,
+     * this parameter is ignored.
      * @return amount of LP token user minted and received
      */
     function addLiquidity(
         uint256[] calldata amounts,
         uint256 minToMint,
-        uint256 deadline
+        uint256 deadline,
+        bytes32[] calldata merkleProof
     )
         external
-        virtual
         nonReentrant
         whenNotPaused
         deadlineCheck(deadline)
         returns (uint256)
     {
-        return swapStorage.addLiquidity(amounts, minToMint);
+        return swapStorage.addLiquidity(amounts, minToMint, merkleProof);
     }
 
     /**
@@ -411,13 +460,7 @@ contract Swap is OwnerPausableUpgradeable {
         uint256 amount,
         uint256[] calldata minAmounts,
         uint256 deadline
-    )
-        external
-        virtual
-        nonReentrant
-        deadlineCheck(deadline)
-        returns (uint256[] memory)
-    {
+    ) external nonReentrant deadlineCheck(deadline) returns (uint256[] memory) {
         return swapStorage.removeLiquidity(amount, minAmounts);
     }
 
@@ -437,7 +480,6 @@ contract Swap is OwnerPausableUpgradeable {
         uint256 deadline
     )
         external
-        virtual
         nonReentrant
         whenNotPaused
         deadlineCheck(deadline)
@@ -467,7 +509,6 @@ contract Swap is OwnerPausableUpgradeable {
         uint256 deadline
     )
         external
-        virtual
         nonReentrant
         whenNotPaused
         deadlineCheck(deadline)
@@ -477,6 +518,24 @@ contract Swap is OwnerPausableUpgradeable {
     }
 
     /*** ADMIN FUNCTIONS ***/
+
+    /**
+     * @notice Updates the user withdraw fee. This function can only be called by
+     * the pool token. Should be used to update the withdraw fee on transfer of pool tokens.
+     * Transferring your pool token will reset the 4 weeks period. If the recipient is already
+     * holding some pool tokens, the withdraw fee will be discounted in respective amounts.
+     * @param recipient address of the recipient of pool token
+     * @param transferAmount amount of pool token to transfer
+     */
+    function updateUserWithdrawFee(address recipient, uint256 transferAmount)
+        external
+    {
+        require(
+            msg.sender == address(swapStorage.lpToken),
+            "Only callable by pool token"
+        );
+        swapStorage.updateUserWithdrawFee(recipient, transferAmount);
+    }
 
     /**
      * @notice Withdraw all admin fees to the contract owner
@@ -502,6 +561,15 @@ contract Swap is OwnerPausableUpgradeable {
     }
 
     /**
+     * @notice Update the withdraw fee. This fee decays linearly over 4 weeks since
+     * user's last deposit.
+     * @param newWithdrawFee new withdraw fee to be applied on future deposits
+     */
+    function setDefaultWithdrawFee(uint256 newWithdrawFee) external onlyOwner {
+        swapStorage.setDefaultWithdrawFee(newWithdrawFee);
+    }
+
+    /**
      * @notice Start ramping up or down A parameter towards given futureA and futureTime
      * Checks if the change is too rapid, and commits the new A value only when it falls under
      * the limit range.
@@ -517,5 +585,20 @@ contract Swap is OwnerPausableUpgradeable {
      */
     function stopRampA() external onlyOwner {
         swapStorage.stopRampA();
+    }
+
+    /**
+     * @notice Disables the guarded launch phase, removing any limits on deposit amounts and addresses
+     */
+    function disableGuard() external onlyOwner {
+        guarded = false;
+    }
+
+    /**
+     * @notice Reads and returns current guarded status of the pool
+     * @return guarded_ boolean value indicating whether the deposits should be guarded
+     */
+    function isGuarded() external view returns (bool) {
+        return guarded;
     }
 }

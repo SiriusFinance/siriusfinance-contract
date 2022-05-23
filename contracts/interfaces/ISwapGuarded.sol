@@ -2,16 +2,16 @@
 
 pragma solidity 0.8.6;
 
-import "@openzeppelin/contracts-upgradeable-4.2.0/token/ERC20/IERC20Upgradeable.sol";
+import "@openzeppelin/contracts-4.2.0/token/ERC20/ERC20.sol";
 import "./IAllowlist.sol";
 
-interface ISwap {
+interface ISwapGuarded {
     // pool data view functions
     function getA() external view returns (uint256);
 
     function getAllowlist() external view returns (IAllowlist);
 
-    function getToken(uint8 index) external view returns (IERC20Upgradeable);
+    function getToken(uint8 index) external view returns (IERC20);
 
     function getTokenIndex(address tokenAddress) external view returns (uint8);
 
@@ -20,19 +20,6 @@ interface ISwap {
     function getVirtualPrice() external view returns (uint256);
 
     function isGuarded() external view returns (bool);
-
-    function swapStorage()
-        external
-        view
-        returns (
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            address
-        );
 
     // min return calculation functions
     function calculateSwap(
@@ -57,17 +44,6 @@ interface ISwap {
     ) external view returns (uint256 availableTokenAmount);
 
     // state modifying functions
-    function initialize(
-        IERC20Upgradeable[] memory pooledTokens,
-        uint8[] memory decimals,
-        string memory lpTokenName,
-        string memory lpTokenSymbol,
-        uint256 a,
-        uint256 fee,
-        uint256 adminFee,
-        address lpTokenTargetAddress
-    ) external;
-
     function swap(
         uint8 tokenIndexFrom,
         uint8 tokenIndexTo,
@@ -79,7 +55,8 @@ interface ISwap {
     function addLiquidity(
         uint256[] calldata amounts,
         uint256 minToMint,
-        uint256 deadline
+        uint256 deadline,
+        bytes32[] calldata merkleProof
     ) external returns (uint256);
 
     function removeLiquidity(
@@ -100,4 +77,8 @@ interface ISwap {
         uint256 maxBurnAmount,
         uint256 deadline
     ) external returns (uint256);
+
+    // withdraw fee update function
+    function updateUserWithdrawFee(address recipient, uint256 transferAmount)
+        external;
 }

@@ -3,13 +3,11 @@
 pragma solidity 0.8.6;
 
 import "@openzeppelin/contracts-upgradeable-4.2.0/token/ERC20/IERC20Upgradeable.sol";
-import "./IAllowlist.sol";
+import "./ISwap.sol";
 
-interface ISwap {
+interface IMetaSwap {
     // pool data view functions
     function getA() external view returns (uint256);
-
-    function getAllowlist() external view returns (IAllowlist);
 
     function getToken(uint8 index) external view returns (IERC20Upgradeable);
 
@@ -21,21 +19,14 @@ interface ISwap {
 
     function isGuarded() external view returns (bool);
 
-    function swapStorage()
-        external
-        view
-        returns (
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            address
-        );
-
     // min return calculation functions
     function calculateSwap(
+        uint8 tokenIndexFrom,
+        uint8 tokenIndexTo,
+        uint256 dx
+    ) external view returns (uint256);
+
+    function calculateSwapUnderlying(
         uint8 tokenIndexFrom,
         uint8 tokenIndexTo,
         uint256 dx
@@ -58,17 +49,37 @@ interface ISwap {
 
     // state modifying functions
     function initialize(
-        IERC20Upgradeable[] memory pooledTokens,
+        IERC20Upgradeable[] memory _pooledTokens,
         uint8[] memory decimals,
         string memory lpTokenName,
         string memory lpTokenSymbol,
-        uint256 a,
-        uint256 fee,
-        uint256 adminFee,
+        uint256 _a,
+        uint256 _fee,
+        uint256 _adminFee,
         address lpTokenTargetAddress
     ) external;
 
+    function initializeMetaSwap(
+        IERC20Upgradeable[] memory _pooledTokens,
+        uint8[] memory decimals,
+        string memory lpTokenName,
+        string memory lpTokenSymbol,
+        uint256 _a,
+        uint256 _fee,
+        uint256 _adminFee,
+        address lpTokenTargetAddress,
+        ISwap baseSwap
+    ) external;
+
     function swap(
+        uint8 tokenIndexFrom,
+        uint8 tokenIndexTo,
+        uint256 dx,
+        uint256 minDy,
+        uint256 deadline
+    ) external returns (uint256);
+
+    function swapUnderlying(
         uint8 tokenIndexFrom,
         uint8 tokenIndexTo,
         uint256 dx,

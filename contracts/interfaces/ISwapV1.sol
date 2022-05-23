@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
-
 pragma solidity 0.8.6;
 
-import "@openzeppelin/contracts-upgradeable-4.2.0/token/ERC20/IERC20Upgradeable.sol";
+import "@openzeppelin/contracts-4.2.0/token/ERC20/ERC20.sol";
 import "./IAllowlist.sol";
 
-interface ISwap {
+interface ISwapV1 {
     // pool data view functions
     function getA() external view returns (uint256);
 
     function getAllowlist() external view returns (IAllowlist);
 
-    function getToken(uint8 index) external view returns (IERC20Upgradeable);
+    function getToken(uint8 index) external view returns (IERC20);
 
     function getTokenIndex(address tokenAddress) external view returns (uint8);
 
@@ -21,19 +20,6 @@ interface ISwap {
 
     function isGuarded() external view returns (bool);
 
-    function swapStorage()
-        external
-        view
-        returns (
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            address
-        );
-
     // min return calculation functions
     function calculateSwap(
         uint8 tokenIndexFrom,
@@ -41,30 +27,33 @@ interface ISwap {
         uint256 dx
     ) external view returns (uint256);
 
-    function calculateTokenAmount(uint256[] calldata amounts, bool deposit)
-        external
-        view
-        returns (uint256);
+    function calculateTokenAmount(
+        address account,
+        uint256[] calldata amounts,
+        bool deposit
+    ) external view returns (uint256);
 
-    function calculateRemoveLiquidity(uint256 amount)
+    function calculateRemoveLiquidity(address account, uint256 amount)
         external
         view
         returns (uint256[] memory);
 
     function calculateRemoveLiquidityOneToken(
+        address account,
         uint256 tokenAmount,
         uint8 tokenIndex
     ) external view returns (uint256 availableTokenAmount);
 
     // state modifying functions
     function initialize(
-        IERC20Upgradeable[] memory pooledTokens,
+        IERC20[] memory pooledTokens,
         uint8[] memory decimals,
         string memory lpTokenName,
         string memory lpTokenSymbol,
         uint256 a,
         uint256 fee,
         uint256 adminFee,
+        uint256 withdrawFee,
         address lpTokenTargetAddress
     ) external;
 
@@ -100,4 +89,8 @@ interface ISwap {
         uint256 maxBurnAmount,
         uint256 deadline
     ) external returns (uint256);
+
+    // withdraw fee update function
+    function updateUserWithdrawFee(address recipient, uint256 transferAmount)
+        external;
 }

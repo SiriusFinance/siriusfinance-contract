@@ -2,7 +2,7 @@
 
 pragma solidity 0.8.6;
 
-import "@openzeppelin/contracts-4.2.0/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts-upgradeable-4.2.0/token/ERC20/utils/SafeERC20Upgradeable.sol";
 import "./SwapUtils.sol";
 
 /**
@@ -11,7 +11,7 @@ import "./SwapUtils.sol";
  * This library assumes the struct is fully validated.
  */
 library AmplificationUtils {
-    using SafeMath for uint256;
+    using SafeMathUpgradeable for uint256;
 
     event RampA(
         uint256 oldA,
